@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: voice-biomarker-backend
+    runtime: python
+    buildCommand: "pip install -r requirements.txt && python train_model.py"
+    startCommand: "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+    plan: free
+    envVars:
+      - key: WAQI_API_TOKEN
+        sync: false
+      - key: OWM_API_TOKEN
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_ALGORITHM
+        value: HS256
+      - key: JWT_EXPIRE_MINUTES
+        value: "10080"
+      - key: CORS_ORIGINS
+        value: "*"
+      - key: PYTHON_VERSION
+        value: "3.11.9"

@@ -43,15 +43,13 @@ class BaselineBiomarkers(BaseModel):
 
 
 class BaselineResponse(BaseModel):
-    """Response returned after saving or retrieving a baseline recording."""
-    message: str
-    f0_hz: float
-    jitter_pct: float
-    shimmer_pct: float
-    hnr_db: float
-    duration_s: Optional[float] = None
-    rms_energy: Optional[float] = None
-    voiced_ratio: Optional[float] = None
+    """Response matching exactly what baseline.py returns."""
+    baseline_id: Optional[str] = None
+    biomarkers: Optional[Biomarkers] = None
+    created_at: Optional[datetime] = None
+
+    class Config:
+        extra = "allow"
 
 
 class BiomarkerDeltas(BaseModel):

@@ -240,12 +240,11 @@ def _classify_aqi_level(pm25) -> str:
     if pm25 is None:
         return "Unknown"
     p = float(pm25)
-    if p <= 50:   return "Good"
-    if p <= 100:  return "Moderate"
-    if p <= 150:  return "Unhealthy for Sensitive"
-    if p <= 200:  return "Unhealthy"
-    if p <= 300:  return "Very Unhealthy"
-    return "Hazardous"
+    if p <= 50:
+        return "Low"
+    if p <= 100:
+        return "Moderate"
+    return "High"
 
 
 @router.get("/air-quality/map")

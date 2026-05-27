@@ -4,8 +4,7 @@ Loads a trained Random Forest model if available. Otherwise, falls back to a
 deterministic rule-based classifier so the system is fully functional from day 1
 while you collect data and train the real model.
 
-This is intentional — during your capstone timeline you need a working end-to-end
-demo long before you have labeled training data. Swap in the real model by:
+Swap in the real model by:
   1. Training a RandomForestClassifier in train_model.py
   2. Saving it to model/risk_classifier.joblib
   3. The service auto-detects and uses it on next startup.
@@ -49,16 +48,14 @@ def _rule_based_classify(
     Scores risk based on:
       - Voice feature deviations from baseline (jitter, shimmer, HNR)
       - Air quality levels (PM2.5, NO2, O3)
-      - User risk factors (asthma, smoking)
+      - User demographics (age, gender)
 
     Returns (risk_level, confidence, top_factors).
     """
     score = 0.0
-    factors: List[Tuple[str, float]] = []  # (factor_name, contribution)
+    factors: List[Tuple[str, float]] = []
 
     # --- Voice biomarker deviations ---
-    # Reference thresholds based on Praat/clinical voice literature:
-    #   Healthy jitter < 1.04%, healthy shimmer < 3.81%, healthy HNR > 20 dB
     jitter = biomarkers.get("jitter_pct", 0)
     shimmer = biomarkers.get("shimmer_pct", 0)
     hnr = biomarkers.get("hnr_db", 25)
@@ -89,7 +86,6 @@ def _rule_based_classify(
     no2 = air_quality.get("no2")
     o3 = air_quality.get("o3")
 
-    # WAQI iaqi values are AQI sub-index values; 50 = moderate, 100 = unhealthy for sensitive
     if pm25 is not None:
         if pm25 > 150:
             score += 2.5
@@ -107,15 +103,9 @@ def _rule_based_classify(
         score += 1.0
         factors.append(("o3", 1.0))
 
-    # --- Demographic modifiers ---
-    if demographics.get("has_asthma"):
-        score *= 1.3
-        factors.append(("asthma_history", 0.5))
-    if demographics.get("smoker"):
-        score *= 1.2
-        factors.append(("smoker", 0.4))
+    # --- Age modifier only ---
     age = demographics.get("age", 30)
-    if age >= 60 or age <= 15:
+    if age >= 60:
         score *= 1.15
 
     # --- Risk level thresholds ---
@@ -144,7 +134,7 @@ def _ml_classify(
 ) -> Tuple[str, float, List[str]]:
     """Use the trained RandomForestClassifier."""
     import numpy as np
-    # Build feature vector in the order expected by the model
+    # Build feature vector — smoker and asthma removed
     feature_map = {
         "f0_hz": biomarkers.get("f0_hz", 0),
         "jitter_pct": biomarkers.get("jitter_pct", 0),
@@ -160,15 +150,12 @@ def _ml_classify(
         "age": demographics.get("age", 30),
         "gender_male": 1 if demographics.get("gender") == "male" else 0,
         "gender_female": 1 if demographics.get("gender") == "female" else 0,
-        "smoker": 1 if demographics.get("smoker") else 0,
-        "has_asthma": 1 if demographics.get("has_asthma") else 0,
     }
     X = np.array([[feature_map[name] for name in _feature_names]])
     pred = _model.predict(X)[0]
     proba = _model.predict_proba(X)[0]
     confidence = float(np.max(proba))
 
-    # Feature importances give us the top factors
     importances = _model.feature_importances_
     top_idx = np.argsort(importances)[::-1][:3]
     top = [_feature_names[i] for i in top_idx]

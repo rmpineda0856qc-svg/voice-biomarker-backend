@@ -25,8 +25,6 @@ def register(body: schemas.UserRegister):
             password_hash=hash_password(body.password),
             age=body.age,
             gender=body.gender,
-            smoker=body.smoker,
-            has_asthma=body.has_asthma,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

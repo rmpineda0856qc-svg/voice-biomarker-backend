@@ -31,8 +31,7 @@ def _get_client():
 
 # ── Users ─────────────────────────────────────────────────────────────────────
 
-def create_user(email: str, password_hash: str, age: int, gender: str,
-                smoker: bool, has_asthma: bool) -> str:
+def create_user(email: str, password_hash: str, age: int, gender: str) -> str:
     """Create a new user. Raises ValueError if email already exists."""
     db = _get_client()
 
@@ -48,8 +47,6 @@ def create_user(email: str, password_hash: str, age: int, gender: str,
         "password_hash": password_hash,
         "age": age,
         "gender": gender,
-        "smoker": smoker,
-        "has_asthma": has_asthma,
     }).execute()
     return user_id
 
@@ -165,7 +162,6 @@ def get_user_history(user_id: str, limit: int = 50) -> List[dict]:
         .execute()
     )
 
-    # Convert to format expected by existing routers
     history = []
     for a in result.data:
         history.append({

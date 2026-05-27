@@ -9,8 +9,6 @@ class UserRegister(BaseModel):
     password: str
     age: int
     gender: str
-    smoker: bool
-    has_asthma: bool
 
 
 class UserLogin(BaseModel):

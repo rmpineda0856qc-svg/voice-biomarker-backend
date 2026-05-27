@@ -2,6 +2,8 @@
 Assessment endpoint — key fix:
 - Builds BiomarkerComparison object so mobile can show baseline vs current
 - Silence detection already handled in voice_analysis.py
+- Indoor/outdoor adjustment using WHO infiltration factor (0.5)
+- Reverse geocoding for city name in history
 """
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
 from datetime import datetime, timezone
@@ -16,6 +18,10 @@ from app.services.air_quality import fetch_air_quality
 from app.services.classifier import classify_risk, build_recommendation
 
 router = APIRouter(tags=["assessment"])
+
+# WHO Indoor Air Quality Guidelines infiltration factor
+# Indoor PM2.5 ≈ 50% of outdoor in well-ventilated buildings
+INDOOR_INFILTRATION_FACTOR = 0.5
 
 
 def _utc_now() -> datetime:
@@ -34,6 +40,49 @@ def _to_utc_iso(dt) -> str:
     return str(dt)
 
 
+def _adjust_for_indoor(air_quality: dict) -> dict:
+    """Apply WHO infiltration factor for indoor recordings."""
+    adjusted = air_quality.copy()
+    if adjusted.get("pm25") is not None:
+        adjusted["pm25"] = round(adjusted["pm25"] * INDOOR_INFILTRATION_FACTOR, 2)
+    if adjusted.get("no2") is not None:
+        adjusted["no2"] = round(adjusted["no2"] * INDOOR_INFILTRATION_FACTOR, 2)
+    if adjusted.get("o3") is not None:
+        adjusted["o3"] = round(adjusted["o3"] * INDOOR_INFILTRATION_FACTOR, 2)
+    adjusted["location_type"] = "Indoor (adjusted)"
+    return adjusted
+
+
+async def _get_city_name(latitude: float, longitude: float) -> str:
+    """Reverse geocode coordinates to city name using OWM API."""
+    settings = get_settings()
+    token = getattr(settings, "owm_api_token", None) or ""
+    if not token:
+        return "Unknown Location"
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(
+                "http://api.openweathermap.org/geo/1.0/reverse",
+                params={
+                    "lat": latitude,
+                    "lon": longitude,
+                    "limit": 1,
+                    "appid": token,
+                },
+            )
+            response.raise_for_status()
+            data = response.json()
+            if data:
+                name = data[0].get("name", "")
+                state = data[0].get("state", "")
+                if name and state:
+                    return f"{name}, {state}"
+                return name or "Unknown Location"
+    except Exception:
+        pass
+    return "Unknown Location"
+
+
 def _build_comparison(
     current: dict,
     baseline: dict | None,
@@ -42,22 +91,18 @@ def _build_comparison(
     """Build BiomarkerComparison for result screen display."""
     if baseline and deltas:
         return schemas.BiomarkerComparison(
-            # Baseline
             baseline_f0_hz=baseline["f0_hz"],
             baseline_jitter_pct=baseline["jitter_pct"],
             baseline_shimmer_pct=baseline["shimmer_pct"],
             baseline_hnr_db=baseline["hnr_db"],
-            # Current
             current_f0_hz=current["f0_hz"],
             current_jitter_pct=current["jitter_pct"],
             current_shimmer_pct=current["shimmer_pct"],
             current_hnr_db=current["hnr_db"],
-            # Absolute deltas
             delta_f0=deltas["delta_f0"],
             delta_jitter=deltas["delta_jitter"],
             delta_shimmer=deltas["delta_shimmer"],
             delta_hnr=deltas["delta_hnr"],
-            # Percentage changes
             delta_f0_pct=deltas["delta_f0_pct"],
             delta_jitter_pct=deltas["delta_jitter_pct"],
             delta_shimmer_pct=deltas["delta_shimmer_pct"],
@@ -65,7 +110,6 @@ def _build_comparison(
             has_baseline=True,
         )
     else:
-        # No baseline — show current values only
         return schemas.BiomarkerComparison(
             current_f0_hz=current["f0_hz"],
             current_jitter_pct=current["jitter_pct"],
@@ -116,13 +160,13 @@ async def create_assessment(
     audio: UploadFile = File(...),
     latitude: float = Form(...),
     longitude: float = Form(...),
+    is_indoor: bool = Form(False),
     user: dict = Depends(get_current_user),
 ):
     audio_bytes = await audio.read()
     if len(audio_bytes) < 1000:
         raise HTTPException(status_code=400, detail="Audio file too small")
 
-    # extract_biomarkers will raise ValueError (→ 422) if silent/no voice
     try:
         biomarkers = extract_biomarkers(audio_bytes)
     except ValueError as e:
@@ -130,7 +174,6 @@ async def create_assessment(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Audio analysis failed: {e}")
 
-    # Baseline comparison
     baseline = database.get_baseline(user["id"])
     if baseline:
         baseline_biomarkers = {
@@ -148,20 +191,21 @@ async def create_assessment(
                   "delta_shimmer_pct": 0, "delta_hnr_pct": 0}
 
     air_quality = await fetch_air_quality(latitude, longitude)
+    if is_indoor:
+        air_quality = _adjust_for_indoor(air_quality)
 
     demographics = {
-        "age": user["age"],
-        "gender": user["gender"],
-        "smoker": user["smoker"],
-        "has_asthma": user["has_asthma"],
+        "age": user.get("age", 30),
+        "gender": user.get("gender", "other"),
     }
+
     risk, confidence, top_factors = classify_risk(
         biomarkers, deltas, air_quality, demographics
     )
     recommendation = build_recommendation(risk, air_quality, top_factors)
-
-    # Build comparison object for result screen
-    comparison = _build_comparison(biomarkers, baseline_biomarkers, deltas if baseline else None)
+    comparison = _build_comparison(
+        biomarkers, baseline_biomarkers, deltas if baseline else None
+    )
 
     data = {
         "biomarkers": biomarkers,
@@ -190,10 +234,19 @@ async def create_assessment(
 
 
 @router.get("/history")
-def get_history(limit: int = 30, user: dict = Depends(get_current_user)):
+async def get_history(
+    limit: int = 30,
+    user: dict = Depends(get_current_user)
+):
     history = database.get_user_history(user["id"], limit=limit)
-    return [
-        {
+
+    async def _enrich(a):
+        lat = a.get("latitude")
+        lng = a.get("longitude")
+        city = "Unknown Location"
+        if lat is not None and lng is not None:
+            city = await _get_city_name(lat, lng)
+        return {
             "assessment_id": a["id"],
             "risk_level": a["risk_level"],
             "pm25": a["air_quality"].get("pm25"),
@@ -201,9 +254,13 @@ def get_history(limit: int = 30, user: dict = Depends(get_current_user)):
             "o3": a["air_quality"].get("o3"),
             "biomarkers": a["biomarkers"],
             "timestamp": _to_utc_iso(a["timestamp"]),
+            "latitude": lat,
+            "longitude": lng,
+            "city": city,
         }
-        for a in history
-    ]
+
+    results = await asyncio.gather(*[_enrich(a) for a in history])
+    return list(results)
 
 
 @router.get("/assessments/{assessment_id}",

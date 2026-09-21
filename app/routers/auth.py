@@ -4,7 +4,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from fastapi import Depends
 
 from app import database, schemas
-from app.services.auth import hash_password, verify_password, create_access_token
+from app.services.auth import hash_password, verify_password, create_access_token, get_current_user
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -44,3 +44,16 @@ def login(form: OAuth2PasswordRequestForm = Depends()):
         )
     token = create_access_token(user["id"])
     return schemas.Token(access_token=token, user_id=user["id"])
+
+
+@router.delete("/account")
+def delete_account(user: dict = Depends(get_current_user)):
+    """Permanently delete user account and all associated data."""
+    try:
+        database.delete_user(user["id"])
+        return {"message": "Account deleted successfully"}
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to delete account: {str(e)}"
+        )

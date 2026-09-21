@@ -231,3 +231,13 @@ def get_assessment(assessment_id: str) -> Optional[dict]:
         "recommendation": a.get("recommendation"),
         "biomarker_comparison": a.get("biomarker_comparison"),
     }
+
+def delete_user(user_id: str) -> None:
+    """Permanently delete user and all associated data."""
+    db = _get_client()
+    # Delete assessments first
+    db.table("assessments").delete().eq("user_id", user_id).execute()
+    # Delete baseline
+    db.table("baselines").delete().eq("user_id", user_id).execute()
+    # Delete user account
+    db.table("users").delete().eq("id", user_id).execute()
